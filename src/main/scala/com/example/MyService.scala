@@ -35,45 +35,25 @@ class SeedHandler extends Actor {
 // we want to be able to test it independently, without having to spin up an actor
 class MyServiceActor extends Actor with MyService {
 
-  def seedHandler = context.actorOf(Props[SeedHandler], "seed-handler")
-  implicit val timeout = Timeout(5 seconds)
-
-
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
   def actorRefFactory = context
 
-  implicit def ec = actorRefFactory.dispatcher
-
   // this actor only runs our route, but you could add
   // other things here, like request stream processing
   // or timeout handling
-  def receive = runRoute(myRoute ~
-  pathPrefix("api") {
-    jsonpWithParameter("callback") {
-      path("numbers") {
-        get {
-          parameter("seed".as[Int]) { seed =>
-            detach () {
-              validate(seed >= 0, "query parameter 'seed' must be >= 0") {
-                complete {
-                  val reponse  = (seedHandler  ? Seed(seed)).mapTo[Reponse]
-                  reponse
-                  // Reponse((1 to seed).toList, seed, "hello")
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  })
+  def receive = runRoute(myRoute)
 }
 
 
 
 // this trait defines our service behavior independently from the service actor
 trait MyService extends HttpService {
+
+  implicit val timeout = Timeout(5 seconds)
+  implicit def ec = actorRefFactory.dispatcher
+
+  lazy val seedHandler = actorRefFactory.actorOf(Props[SeedHandler])
 
   val myRoute =
     path("") {
@@ -100,6 +80,21 @@ trait MyService extends HttpService {
             </html>
           }
         }
+    }
+  }  ~
+  pathPrefix("api") {
+    jsonpWithParameter("callback") {
+      path("numbers") {
+        get {
+          parameter("seed".as[Int]) { seed =>
+            validate(seed >= 0, "query parameter 'seed' must be >= 0") {
+              complete {
+                (seedHandler  ? Seed(seed)).mapTo[Reponse]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
