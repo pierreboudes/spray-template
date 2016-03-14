@@ -1,14 +1,21 @@
 package com.example
 
-import akka.actor.Actor
+import akka.actor.{Actor, Props}
 import spray.routing._
 import spray.http._
 import MediaTypes._
+
+import scala.concurrent.duration._
+import akka.util.Timeout
+import akka.pattern.ask
 
 // import spray.httpx.marshalling._
 import spray.json._
 import spray.json.DefaultJsonProtocol._
 import spray.httpx.SprayJsonSupport
+
+
+case class Seed(n: Int)
 
 case class Reponse(entiers: List[Int], graine: Int, mot: String)
 object JsonReponse extends DefaultJsonProtocol with SprayJsonSupport {
@@ -18,20 +25,52 @@ object JsonReponse extends DefaultJsonProtocol with SprayJsonSupport {
 import JsonReponse._
 
 
+class SeedHandler extends Actor {
+  def receive = {
+    case Seed(n) => sender ! Reponse((1 to n).toList, n, "hello")
+  }
+}
 
 // we don't implement our route structure directly in the service actor because
 // we want to be able to test it independently, without having to spin up an actor
 class MyServiceActor extends Actor with MyService {
 
+  def seedHandler = context.actorOf(Props[SeedHandler], "seed-handler")
+  implicit val timeout = Timeout(5 seconds)
+
+
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
   def actorRefFactory = context
 
+  implicit def ec = actorRefFactory.dispatcher
+
   // this actor only runs our route, but you could add
   // other things here, like request stream processing
   // or timeout handling
-  def receive = runRoute(myRoute)
+  def receive = runRoute(myRoute ~
+  pathPrefix("api") {
+    jsonpWithParameter("callback") {
+      path("numbers") {
+        get {
+          parameter("seed".as[Int]) { seed =>
+            detach () {
+              validate(seed >= 0, "query parameter 'seed' must be >= 0") {
+                complete {
+                  val reponse  = (seedHandler  ? Seed(seed)).mapTo[Reponse]
+                  reponse
+                  // Reponse((1 to seed).toList, seed, "hello")
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  })
 }
+
+
 
 // this trait defines our service behavior independently from the service actor
 trait MyService extends HttpService {
@@ -61,23 +100,6 @@ trait MyService extends HttpService {
             </html>
           }
         }
-    }
-  } ~
-  pathPrefix("api") {
-    jsonpWithParameter("callback") {
-      path("numbers") {
-        get {
-          parameter("seed".as[Int]) { seed =>
-            detach () {
-              validate(seed >= 0, "query parameter 'seed' must be >= 0") {
-                complete {
-                  Reponse((1 to seed).toList, seed, "hello")
-                }
-              }
-            }
-          }
-        }
-      }
     }
   }
 }
