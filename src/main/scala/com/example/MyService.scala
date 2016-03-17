@@ -1,6 +1,6 @@
 package com.example
 
-import akka.actor.{Actor, Props}
+import akka.actor.{Actor, ActorRef, Props}
 import spray.routing._
 import spray.http._
 import MediaTypes._
@@ -16,18 +16,49 @@ import spray.httpx.SprayJsonSupport
 
 
 case class Seed(n: Int)
+case class Question(n: Int)
+case class Seedv(n: Int, version: Int, helper: ActorRef)
 
-case class Reponse(entiers: List[Int], graine: Int, mot: String)
+case class Reponse(entiers: List[Int], graine: Int, version: Int, mot: String)
 object JsonReponse extends DefaultJsonProtocol with SprayJsonSupport {
-  implicit val json = jsonFormat3(Reponse)
+  implicit val json = jsonFormat4(Reponse)
 }
 
 import JsonReponse._
 
 
-class SeedHandler extends Actor {
+class Helper extends Actor {
   def receive = {
-    case Seed(n) => sender ! Reponse((1 to n).toList, n, "hello")
+    case Question(n) => sender !  Reponse((1 to n).toList, n, 0, "hello I am helping")
+  }
+}
+
+
+class ApiHandler extends Actor {
+  var version = 0
+  lazy val helper = context.actorOf(Props[Helper])
+
+  def receive = {
+    case Seed(n) => {
+      val seedHandler = context.actorOf(Props[SeedHandler])
+      seedHandler forward Seedv(n, version, helper)
+      version += 1
+    }
+  }
+}
+
+class SeedHandler extends Actor {
+  var client: Option[ActorRef] = None
+  var version = 0
+
+  def receive = {
+    case Seedv(n, vers, helper) => {
+      client = Some(sender)
+      version = vers
+      helper ! Question(n)
+    }
+    case Reponse(l, g, v, m) => client map
+      { _ forward Reponse(l, g, version, "I am pleased to serve")}
   }
 }
 
@@ -53,7 +84,7 @@ trait MyService extends HttpService {
   implicit val timeout = Timeout(5 seconds)
   implicit def ec = actorRefFactory.dispatcher
 
-  lazy val seedHandler = actorRefFactory.actorOf(Props[SeedHandler])
+  lazy val handler = actorRefFactory.actorOf(Props[ApiHandler])
 
   val myRoute =
     path("") {
@@ -88,8 +119,10 @@ trait MyService extends HttpService {
         get {
           parameter("seed".as[Int]) { seed =>
             validate(seed >= 0, "query parameter 'seed' must be >= 0") {
-              complete {
-                (seedHandler  ? Seed(seed)).mapTo[Reponse]
+             detach (ec) {
+                complete {
+                  (handler  ? Seed(seed)).mapTo[Reponse]
+                }
               }
             }
           }
